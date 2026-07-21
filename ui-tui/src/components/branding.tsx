@@ -188,6 +188,37 @@ export function Banner({ maxWidth, t }: { maxWidth?: number; t: Theme }) {
   )
 }
 
+// ── Skeleton ─────────────────────────────────────────────────────────
+//
+// Lazy sections render placeholder rows shaped like the real content —
+// label-width block then a longer value run — instead of a blank gap that
+// pops when data lands. Widths are deterministic (no shimmer churn in the
+// diff renderer); the fade tone keeps them clearly non-content.
+const SKELETON_ROWS: readonly [label: number, value: number][] = [
+  [7, 30],
+  [7, 9],
+  [14, 12],
+  [12, 12],
+  [7, 7],
+  [10, 13]
+]
+
+function SkeletonRows({ fade, label }: { fade: string; label: string }) {
+  return (
+    <>
+      {SKELETON_ROWS.map(([labelWidth, valueWidth], i) => (
+        <Text key={i}>
+          <Text color={label}>{'▁'.repeat(labelWidth)}</Text>
+          <Text color={fade}>
+            {' '}
+            {'▁'.repeat(valueWidth)}
+          </Text>
+        </Text>
+      ))}
+    </>
+  )
+}
+
 // ── Collapsible helpers ──────────────────────────────────────────────
 
 function CollapseToggle({
@@ -299,6 +330,10 @@ export function SessionPanel({ info, maxWidth, sid, t }: SessionPanelProps) {
   const mcpConnected = mcpServers.filter(s => s.connected).length
 
   const toolsBody = () => {
+    if (info.lazy && toolEntries.length === 0) {
+      return <SkeletonRows fade={listFade} label={t.color.label} />
+    }
+
     const shown = toolEntries.slice(0, TOOLSETS_MAX)
     const overflow = toolEntries.length - TOOLSETS_MAX
 
@@ -463,8 +498,9 @@ export function SessionPanel({ info, maxWidth, sid, t }: SessionPanelProps) {
         <Text />
 
         <Text color={t.color.text}>
-          {toolsTotal} tools{' · '}
-          {skillsTotal} skills
+          {/* Lazy boot: never print "0 tools · 0 skills" while counts load. */}
+          {info.lazy && !toolsTotal ? '… ' : `${toolsTotal} `}tools{' · '}
+          {info.lazy && !skillsTotal ? '… ' : `${skillsTotal} `}skills
           {mcpConnected ? ` · ${mcpConnected} MCP` : ''}
           {' · '}
           <Text color={t.color.muted}>/help for commands</Text>
