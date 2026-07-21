@@ -8,6 +8,7 @@ import { flat } from '../lib/text.js'
 import type { Theme } from '../theme.js'
 import type { PanelSection, SessionInfo } from '../types.js'
 
+import { ShimmerRows } from './loaders.js'
 import { WidgetGrid } from './widgetGrid.js'
 
 const LOADER_TICK_MS = 120
@@ -190,11 +191,10 @@ export function Banner({ maxWidth, t }: { maxWidth?: number; t: Theme }) {
 
 // ── Skeleton ─────────────────────────────────────────────────────────
 //
-// Lazy sections render placeholder rows shaped like the real content —
-// label-width block then a longer value run — instead of a blank gap that
-// pops when data lands. Widths are deterministic (no shimmer churn in the
-// diff renderer); the fade tone keeps them clearly non-content.
-const SKELETON_ROWS: readonly [label: number, value: number][] = [
+// Lazy sections render shimmer rows shaped like the real content (label
+// block + value run) instead of a blank gap that pops when data lands.
+// Row widths mirror the typical toolsets listing.
+const SKELETON_ROWS: readonly (readonly [number, number])[] = [
   [7, 30],
   [7, 9],
   [14, 12],
@@ -202,22 +202,6 @@ const SKELETON_ROWS: readonly [label: number, value: number][] = [
   [7, 7],
   [10, 13]
 ]
-
-function SkeletonRows({ fade, label }: { fade: string; label: string }) {
-  return (
-    <>
-      {SKELETON_ROWS.map(([labelWidth, valueWidth], i) => (
-        <Text key={i}>
-          <Text color={label}>{'▁'.repeat(labelWidth)}</Text>
-          <Text color={fade}>
-            {' '}
-            {'▁'.repeat(valueWidth)}
-          </Text>
-        </Text>
-      ))}
-    </>
-  )
-}
 
 // ── Collapsible helpers ──────────────────────────────────────────────
 
@@ -331,7 +315,7 @@ export function SessionPanel({ info, maxWidth, sid, t }: SessionPanelProps) {
 
   const toolsBody = () => {
     if (info.lazy && toolEntries.length === 0) {
-      return <SkeletonRows fade={listFade} label={t.color.label} />
+      return <ShimmerRows color={listFade} highlight={t.color.label} rows={SKELETON_ROWS} />
     }
 
     const shown = toolEntries.slice(0, TOOLSETS_MAX)
