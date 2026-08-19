@@ -1408,3 +1408,63 @@ def test_notify_sub_starts_caught_up_on_active_task(kanban_home):
         conn.close()
 
 
+def test_known_assignees_includes_hub_lanes(tmp_path, monkeypatch):
+    """Hub kanban_worker_lanes appear even before any task uses them."""
+    home = tmp_path / "agents" / "hermes" / "home"
+    home.mkdir(parents=True)
+    monkeypatch.setenv("HERMES_HOME", str(home))
+    knowledge = tmp_path / "knowledge"
+    knowledge.mkdir()
+    (knowledge / "agents.json").write_text(
+        json.dumps({
+            "kanban_worker_lanes": {
+                "lanes": {
+                    "<hermes profile name>": {"kind": "hermes"},
+                    "cursor": {"label": "Cursor"},
+                    "ghost": {"implemented": False},
+                }
+            }
+        }),
+        encoding="utf-8",
+    )
+    kb.init_db()
+    conn = kb.connect()
+    try:
+        data = kb.known_assignees(conn)
+    finally:
+        conn.close()
+    names = {d["name"] for d in data}
+    assert "cursor" in names
+    assert "ghost" not in names
+    assert "<hermes profile name>" not in names
+
+
+def test_update_task_fields_title_body_assignee(kanban_home):
+    conn = kb.connect()
+    try:
+        tid = kb.create_task(conn, title="old", body="b1", assignee="cursor")
+        ok = kb.update_task_fields(
+            conn, tid, title="new", body="b2", assignee="opencode-cli",
+        )
+        assert ok
+        task = kb.get_task(conn, tid)
+        assert task.title == "new"
+        assert task.body == "b2"
+        assert task.assignee == "opencode-cli"
+        with kb.write_txn(conn):
+            conn.execute(
+                "UPDATE tasks SET status = 'running', claim_lock = 'x' WHERE id = ?",
+                (tid,),
+            )
+        try:
+            kb.update_task_fields(conn, tid, assignee="cursor")
+            raise AssertionError("running reassign should fail")
+        except RuntimeError:
+            pass
+        assert kb.update_task_fields(conn, tid, title="still running")
+        assert kb.get_task(conn, tid).title == "still running"
+        assert kb.get_task(conn, tid).assignee == "opencode-cli"
+    finally:
+        conn.close()
+
+

@@ -490,14 +490,9 @@ def get_board(
                 "SELECT DISTINCT tenant FROM tasks WHERE tenant IS NOT NULL ORDER BY tenant"
             )
         ]
-        # List of distinct assignees for the lane-by-profile sub-grouping.
-        assignees = [
-            r["assignee"]
-            for r in conn.execute(
-                "SELECT DISTINCT assignee FROM tasks WHERE assignee IS NOT NULL "
-                "AND status != 'archived' ORDER BY assignee"
-            )
-        ]
+        # Known assignees for lane-by-profile grouping and create/edit
+        # dropdowns: hub lanes + profiles on disk + names already used.
+        assignees = [e["name"] for e in kanban_db.known_assignees(conn)]
 
         return {
             "columns": [
@@ -2219,12 +2214,14 @@ def get_stats(board: Optional[str] = Query(None)):
 
 @router.get("/assignees")
 def get_assignees(board: Optional[str] = Query(None)):
-    """Known profiles + per-profile task counts.
+    """Known profiles, hub worker lanes, and per-profile task counts.
 
-    Returns the union of ``~/.hermes/profiles/*`` on disk and every
+    Returns the union of Hermes profiles on disk, Agent OS
+    ``kanban_worker_lanes`` from ``knowledge/agents.json``, and every
     distinct assignee currently used on the board. The dashboard uses
-    this to populate its assignee dropdown so a freshly-created profile
-    appears in the picker before it's been given any task.
+    this to populate its assignee dropdown so a hub lane (Cursor,
+    OpenCode CLI, …) appears in the picker before it's been given any
+    task.
     """
     board = _resolve_board(board)
     conn = _conn(board=board)

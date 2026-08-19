@@ -622,6 +622,20 @@ def build_parser(parent_subparsers: argparse._SubParsersAction) -> argparse.Argu
         help="JSON dict of structured facts to store on the latest completed run.",
     )
 
+    p_update = sub.add_parser(
+        "update",
+        help="Edit title, body, and/or assignee on a task",
+    )
+    p_update.add_argument("task_id")
+    p_update.add_argument("--title", default=None, help="New title")
+    p_update.add_argument("--body", default=None, help="New body (description)")
+    p_update.add_argument(
+        "--assignee",
+        default=None,
+        help="Lane or profile name (or 'none' to unassign)",
+    )
+    p_update.add_argument("--json", action="store_true")
+
     p_block = sub.add_parser("block", help="Mark one or more tasks blocked")
     p_block.add_argument("task_id")
     p_block.add_argument("reason", nargs="*", help="Reason (also appended as a comment)")
@@ -1127,6 +1141,7 @@ def kanban_command(args: argparse.Namespace) -> int:
             "attach-rm": _cmd_attach_rm,
             "complete": _cmd_complete,
             "edit":     _cmd_edit,
+            "update":   _cmd_update,
             "block":    _cmd_block,
             "schedule": _cmd_schedule,
             "unblock":  _cmd_unblock,
@@ -2334,6 +2349,37 @@ def _cmd_edit(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_update(args: argparse.Namespace) -> int:
+    if args.title is None and args.body is None and args.assignee is None:
+        print("kanban update: pass --title, --body, and/or --assignee", file=sys.stderr)
+        return 2
+    assignee = kb._FIELD_UNSET
+    if args.assignee is not None:
+        assignee = None if args.assignee.lower() in {"none", "-", "null"} else args.assignee
+    with kb.connect_closing() as conn:
+        try:
+            ok = kb.update_task_fields(
+                conn,
+                args.task_id,
+                title=args.title,
+                body=args.body,
+                assignee=assignee,
+            )
+        except (ValueError, RuntimeError) as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+        if not ok:
+            print(f"no such task: {args.task_id}", file=sys.stderr)
+            return 1
+        task = kb.get_task(conn, args.task_id)
+    if getattr(args, "json", False):
+        print(json.dumps(_task_to_dict(task) if task else {}, indent=2, ensure_ascii=False))
+        return 0
+    who = task.assignee if task else None
+    print(f"Updated {args.task_id}" + (f" (assignee {who or 'unassigned'})" if task else ""))
+    return 0
+
+
 def _cmd_block(args: argparse.Namespace) -> int:
     reason = " ".join(args.reason).strip() if args.reason else None
     kind = getattr(args, "kind", None)
@@ -3353,6 +3399,7 @@ Common subcommands:
   `request-review <id>` Enter first-class review; `request-changes <id> <reason>` returns an active review to its implementer
   `block <id> [reason]` Mark blocked; `schedule <id> [reason]` parks time-delay work; `unblock <id>` to revive
   `assign <id> <profile>`  Reassign
+  `update <id> --title/--body/--assignee`  Edit fields
   `boards list`         Show all boards
   `assignees`           Known profiles + counts
   `context <id>`        Full worker-context dump

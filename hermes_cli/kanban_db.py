@@ -3735,6 +3735,80 @@ def assign_task(conn: sqlite3.Connection, task_id: str, profile: Optional[str]) 
     return True
 
 
+_FIELD_UNSET = object()
+
+
+def update_task_fields(
+    conn: sqlite3.Connection,
+    task_id: str,
+    *,
+    title: Optional[str] = None,
+    body: Optional[str] = None,
+    assignee: Any = _FIELD_UNSET,
+) -> bool:
+    """Update title, body, and/or assignee. Returns False if the task is missing.
+
+    ``assignee=_FIELD_UNSET`` means leave it unchanged; ``assignee=None``
+    unassigns. Refuses an assignee change while the task is running
+    (same rule as :func:`assign_task`). Title/body may still be edited
+    on a running card.
+    """
+    if title is None and body is None and assignee is _FIELD_UNSET:
+        return True
+    if title is not None and not title.strip():
+        raise ValueError("title cannot be empty")
+    profile = _canonical_assignee(assignee) if assignee is not _FIELD_UNSET else _FIELD_UNSET
+    changed: list[str] = []
+    with write_txn(conn):
+        row = conn.execute(
+            "SELECT status, claim_lock, assignee FROM tasks WHERE id = ?",
+            (task_id,),
+        ).fetchone()
+        if not row:
+            return False
+        if (
+            profile is not _FIELD_UNSET
+            and row["claim_lock"] is not None
+            and row["status"] == "running"
+        ):
+            raise RuntimeError(
+                f"cannot reassign {task_id}: currently running (claimed). "
+                "Wait for completion or reclaim the stale lock first."
+            )
+        sets: list[str] = []
+        params: list[Any] = []
+        if title is not None:
+            sets.append("title = ?")
+            params.append(title.strip())
+            changed.append("title")
+        if body is not None:
+            sets.append("body = ?")
+            params.append(body)
+            changed.append("body")
+        if profile is not _FIELD_UNSET:
+            sets.append("assignee = ?")
+            params.append(profile)
+            changed.append("assignee")
+            if row["assignee"] != profile:
+                sets.append("consecutive_failures = 0")
+                sets.append("last_failure_error = NULL")
+        if not sets:
+            return True
+        params.append(task_id)
+        conn.execute(f"UPDATE tasks SET {', '.join(sets)} WHERE id = ?", params)
+        if title is not None or body is not None:
+            payload: dict[str, Any] = {}
+            if title is not None:
+                payload["title"] = title.strip()
+            if body is not None:
+                payload["body"] = body
+            _append_event(conn, task_id, "edited", payload)
+        if profile is not _FIELD_UNSET:
+            _append_event(conn, task_id, "assigned", {"assignee": profile})
+    notify_task_updated(conn, task_id, tuple(changed))
+    return True
+
+
 def set_model_override(
     conn: sqlite3.Connection,
     task_id: str,
@@ -9563,8 +9637,12 @@ def has_spawnable_ready(conn: sqlite3.Connection) -> bool:
     except Exception:
         # Can't introspect — assume spawnable, preserve legacy behavior.
         return True
+    nonspawnable = _hub_nonspawnable_lanes()
     for row in rows:
-        if profile_exists(row["assignee"]):
+        who = row["assignee"]
+        if not who or who in nonspawnable:
+            continue
+        if profile_exists(who):
             return True
     return False
 
@@ -9588,8 +9666,12 @@ def has_spawnable_review(conn: sqlite3.Connection) -> bool:
         from hermes_cli.profiles import profile_exists  # local import: avoids cycle
     except Exception:
         return True
+    nonspawnable = _hub_nonspawnable_lanes()
     for row in rows:
-        if profile_exists(row["assignee"]):
+        who = row["assignee"]
+        if not who or who in nonspawnable:
+            continue
+        if profile_exists(who):
             return True
     return False
 
@@ -10111,6 +10193,10 @@ def _dispatch_once_locked(
             # bucket it as nonspawnable if the profile genuinely isn't
             # there, with the existing diagnostic.
             _default_assignee_resolved = True
+    # Hub lanes whose kind is not ``hermes`` (interactive IDEs, fleet
+    # CLIs) must never auto-spawn — even when a Hermes profile of the
+    # same name exists.
+    _nonspawnable = _hub_nonspawnable_lanes()
     for row in ready_rows:
         if ready_budget is not None and spawned >= ready_budget:
             break
@@ -10172,12 +10258,14 @@ def _dispatch_once_locked(
             from hermes_cli.profiles import profile_exists  # local import: avoids cycle
         except Exception:
             profile_exists = None  # type: ignore[assignment]
-        if profile_exists is not None and not profile_exists(row_assignee):
+        if row_assignee in _nonspawnable or (
+            profile_exists is not None and not profile_exists(row_assignee)
+        ):
             # Bucket separately from skipped_unassigned: the operator
             # cannot fix this by assigning a profile (the assignee IS the
-            # intended owner — a terminal lane). Health telemetry uses
-            # this distinction to suppress spurious "stuck" warnings on
-            # multi-lane setups where the ready queue is steadily full
+            # intended owner — a terminal or human lane). Health telemetry
+            # uses this distinction to suppress spurious "stuck" warnings
+            # on multi-lane setups where the ready queue is steadily full
             # of human-pulled work.
             result.skipped_nonspawnable.append(row["id"])
             continue
@@ -10326,7 +10414,9 @@ def _dispatch_once_locked(
             from hermes_cli.profiles import profile_exists
         except Exception:
             profile_exists = None  # type: ignore[assignment]
-        if profile_exists is not None and not profile_exists(row["assignee"]):
+        if row["assignee"] in _nonspawnable or (
+            profile_exists is not None and not profile_exists(row["assignee"])
+        ):
             result.skipped_nonspawnable.append(row["id"])
             continue
         if _per_profile_cap is not None:
@@ -11990,20 +12080,70 @@ def list_profiles_on_disk() -> list[str]:
     return sorted(names)
 
 
+def _load_hub_kanban_lanes() -> dict[str, dict]:
+    """Lane metadata from Agent OS ``knowledge/agents.json``.
+
+    Resolved relative to ``HERMES_HOME`` when this install lives under the
+    hub (``D:\\AgentOS\\agents\\hermes\\home`` → ``D:\\AgentOS\\knowledge``).
+    Isolated test homes do not have that layout, so they stay empty.
+    """
+    hermes = os.environ.get("HERMES_HOME")
+    if not hermes:
+        return {}
+    path = Path(hermes).resolve().parent.parent.parent / "knowledge" / "agents.json"
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    lanes = (data.get("kanban_worker_lanes") or {}).get("lanes") or {}
+    out: dict[str, dict] = {}
+    for key, meta in lanes.items():
+        if not key or str(key).startswith("<"):
+            continue
+        if not isinstance(meta, dict):
+            meta = {}
+        if meta.get("implemented") is False:
+            continue
+        out[str(key)] = meta
+    return out
+
+
+def _hub_worker_lanes() -> set[str]:
+    """Lane names from Agent OS ``knowledge/agents.json``."""
+    return set(_load_hub_kanban_lanes())
+
+
+def _hub_nonspawnable_lanes() -> set[str]:
+    """Hub lanes the Hermes dispatcher must never spawn.
+
+    Anything whose ``kind`` is not ``hermes`` — interactive IDEs and
+    unattended fleet CLIs. Those cards stay in ``ready`` until the
+    intended surface claims them.
+    """
+    names: set[str] = set()
+    for key, meta in _load_hub_kanban_lanes().items():
+        kind = str(meta.get("kind") or "").strip().lower()
+        if kind and kind != "hermes":
+            names.add(key)
+    return names
+
+
 def known_assignees(conn: sqlite3.Connection) -> list[dict]:
-    """Return every assignee name known to the board or on disk.
+    """Return every assignee name known to the board, on disk, or in the hub.
 
     Each entry is ``{"name": str, "on_disk": bool, "counts": {status: n}}``.
-    A name is included when it's a configured profile on disk OR when
-    any non-archived task has it as the assignee. Used by:
+    A name is included when it's a configured profile on disk, a hub
+    worker lane from ``knowledge/agents.json``, OR when any non-archived
+    task has it as the assignee. Used by:
 
     - ``hermes kanban assignees`` for the terminal.
-    - The dashboard assignee dropdown (so a fresh profile appears in
-      the picker even before it's been given any task).
+    - The dashboard assignee dropdown (so a fresh profile or hub lane
+      appears in the picker even before it's been given any task).
     - Router-profile heuristics ("who's overloaded?") without scanning
       the whole board.
     """
     on_disk = set(list_profiles_on_disk())
+    hub = _hub_worker_lanes()
 
     # Count tasks per (assignee, status), excluding archived.
     counts: dict[str, dict[str, int]] = {}
@@ -12014,7 +12154,7 @@ def known_assignees(conn: sqlite3.Connection) -> list[dict]:
     ):
         counts.setdefault(row["assignee"], {})[row["status"]] = int(row["n"])
 
-    names = sorted(on_disk | set(counts.keys()))
+    names = sorted(on_disk | hub | set(counts.keys()))
     return [
         {
             "name": name,
