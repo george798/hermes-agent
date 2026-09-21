@@ -8702,6 +8702,17 @@ def _build_call_kwargs(
         ):
             kwargs["_reasoning_config"] = dict(reasoning_config)
 
+    from agent.opencode_session import attach_opencode_session_header
+
+    attach_opencode_session_header(
+        kwargs,
+        provider=provider,
+        model=model,
+        base_url=base_url or (
+            _current_custom_base_url() if provider == "custom" else ""
+        ),
+    )
+
     return kwargs
 
 

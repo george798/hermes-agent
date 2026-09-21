@@ -76,6 +76,15 @@ class TestOpenCodeGoKimiReasoning:
         assert extra_body == {}
         assert top_level == {}
 
+    def test_session_id_adds_opencode_session_header(self, opencode_go_profile):
+        extra_body, top_level = opencode_go_profile.build_api_kwargs_extras(
+            reasoning_config=None,
+            model="kimi-k3-max",
+            session_id="hermes-conv-1",
+        )
+        assert extra_body == {}
+        assert top_level["extra_headers"]["x-opencode-session"] == "hermes-conv-1"
+
 
 class TestOpenCodeGoDeepSeekThinking:
     """DeepSeek V4 models use DeepSeek-style thinking controls on OpenCode Go."""

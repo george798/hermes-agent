@@ -678,6 +678,7 @@ class ChatCompletionsTransport(ProviderTransport):
             session_id=params.get("session_id"),
             cache_scope_id=params.get("cache_scope_id"),
         )
+        self._attach_opencode_session(api_kwargs, params, model)
 
         return api_kwargs
 
@@ -841,8 +842,26 @@ class ChatCompletionsTransport(ProviderTransport):
             session_id=params.get("session_id"),
             cache_scope_id=params.get("cache_scope_id"),
         )
+        self._attach_opencode_session(api_kwargs, params, model)
 
         return api_kwargs
+
+    def _attach_opencode_session(
+        self,
+        api_kwargs: dict[str, Any],
+        params: dict[str, Any],
+        model: str,
+    ) -> None:
+        from agent.opencode_session import attach_opencode_session_header
+
+        attach_opencode_session_header(
+            api_kwargs,
+            provider=params.get("provider_name"),
+            model=model,
+            base_url=params.get("base_url"),
+            session_id=params.get("session_id"),
+            cache_scope_id=params.get("cache_scope_id"),
+        )
 
     def normalize_response(self, response: Any, **kwargs) -> NormalizedResponse:
         """Normalize OpenAI ChatCompletion to NormalizedResponse.

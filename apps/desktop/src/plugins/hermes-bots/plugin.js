@@ -3663,13 +3663,16 @@ function knownGroups(metaByName) {
 // Behavioral model (clean-room): a group conversation is ONE ordered room log
 // owned by the plugin. A user send triggers at most GROUP_CHAT_MAX_ROUNDS
 // serial round-robin rounds over the member roster — never parallel, no LLM
-// router. Who speaks each round is a deterministic @mention parse since the
-// last user message (mentioned members only, else everyone); whether a member
+// router. Round 0 is a deterministic @mention parse since the last user
+// message (mentioned members only, else everyone). Later rounds only run
+// members @mentioned by speakers after that user message (or @everyone) —
+// an unaddressed reply does not re-wake the whole roster. Whether a member
 // actually speaks is its own turn's choice — replying with exactly "(pass)"
 // (or nothing, or failing) is silence. Hard caps end every turn; a round in
-// which everyone passed means the conversation settled. Each member runs its
-// turn in its OWN persistent per-group Hermes session and is fed only the
-// room messages that are NEW since it last saw the room.
+// which everyone passed (or nobody was pulled in) means the conversation
+// settled. Each member runs its turn in its OWN persistent per-group Hermes
+// session and is fed only the room messages that are NEW since it last saw
+// the room.
 
 const GROUP_CHAT_MAX_ROUNDS = 3
 const GROUP_CHAT_MAX_MESSAGES = 10
@@ -3740,11 +3743,16 @@ function parseGroupChatMentions(text, members) {
   return { everyone, mentioned }
 }
 
-/** Members that should take a turn this round: everyone when no member is
- *  @-mentioned in messages since the last user entry (or @everyone appears),
- *  otherwise only the mentioned members. Recomputed every round so a member
- *  pulled in mid-conversation joins the next round. */
-function resolveGroupResponders(log, members) {
+/** Members that should take a turn this round.
+ *
+ *  Round 0: everyone when no member is @-mentioned since the last user
+ *  entry (or @everyone appears), otherwise only the mentioned members.
+ *  Later rounds: only members @mentioned by speakers *after* that user
+ *  message (or @everyone). An unaddressed reply does not re-run the
+ *  whole roster — that was making 2-bot rooms take six serial LLM
+ *  calls per user send. Recomputed every round so a member pulled in
+ *  mid-conversation still joins the next round. */
+function resolveGroupResponders(log, members, round = 0) {
   let sinceLastUser = []
 
   for (let i = log.length - 1; i >= 0; i--) {
@@ -3754,10 +3762,11 @@ function resolveGroupResponders(log, members) {
     }
   }
 
+  const source = round > 0 ? sinceLastUser.slice(1) : sinceLastUser
   const mentioned = new Set()
   let everyone = false
 
-  for (const entry of sinceLastUser) {
+  for (const entry of source) {
     const parsed = parseGroupChatMentions(entry.text, members)
 
     if (parsed.everyone) {
@@ -3769,8 +3778,12 @@ function resolveGroupResponders(log, members) {
     }
   }
 
-  if (everyone || mentioned.size === 0) {
+  if (everyone) {
     return members
+  }
+
+  if (mentioned.size === 0) {
+    return round > 0 ? [] : members
   }
 
   return members.filter(member => mentioned.has(groupMemberKey(member)))
@@ -3840,8 +3853,9 @@ function buildGroupChatTurnPrompt({ groupName, members, viewer, deltaLines }) {
     ...deltaLines.map(line => `  ${line}`),
     '',
     'Rules for this room:',
+    '- Decide whether to speak BEFORE using any tool or skill. If the new messages are not in your lane and nobody asked you, reply with exactly "(pass)" and stop.',
     '- Reply with ONE conversational message ONLY if you have something new worth adding: build on what was just said, claim or hand off work, answer a question aimed at you, or report a real result. Keep chatter short (1-3 sentences) — but when you are delivering a result, an answer the user asked for, or substantive work, give it at full quality and length; never thin out real content to fit the room.',
-    '- If you have nothing new to add, reply with exactly "(pass)". Passing is good — it lets the conversation settle.',
+    '- If you have nothing new to add, reply with exactly "(pass)". Passing is good — it lets the conversation settle. Do not load skills, search, or run commands just to decide to pass.',
     '- Mention a teammate as @name to pull them in; mention @user only for a judgment call or a result the user needs. Do not repeat points already made.',
     '- Never reveal content from your private 1:1 chats. Your reply text goes to the room verbatim — no preamble, no meta-commentary.'
   ].join('\n')
@@ -4403,7 +4417,7 @@ async function runGroupChatRounds(group, members, thread) {
       // value shape, since markers are a bare number pre-thread or
       // {before, thread} post-thread.
       const strandedNow = ($groupChats.get()[group] || {}).stranded || {}
-      const responders = rotateGroupSpeakers(resolveGroupResponders(roomLog, members), round)
+      const responders = rotateGroupSpeakers(resolveGroupResponders(roomLog, members, round), round)
         .filter(member => !Object.prototype.hasOwnProperty.call(strandedNow, groupMemberKey(member)))
       let spokeThisRound = 0
 

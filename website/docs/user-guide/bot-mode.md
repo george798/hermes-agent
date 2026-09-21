@@ -82,7 +82,7 @@ Groups are standalone rows in the same activity-ordered roster as Bot DMs. A Bot
 
 **Open chat** on any group row (2–6 Bots) opens a shared room where the whole group coordinates:
 
-- Your message triggers up to **three serial rounds** of member turns. @-mentioned Bots respond (everyone responds when nobody is mentioned); each Bot replies briefly or passes, and the room settles when a full round stays silent.
+- Your message triggers up to **three serial rounds** of member turns. Round 1: @-mentioned Bots respond (everyone responds when nobody is mentioned). Later rounds only run members a speaker @mentioned (or `@everyone`) — an unaddressed reply does not re-wake the whole roster. Each Bot replies briefly or passes, and the room settles when a round stays silent.
 - Bots pull each other in with `@name`, and escalate real judgment calls to you with `@user` — the group row shows a **needs you** badge when that happens.
 - Hard caps (10 messages per send, 3 rounds) keep rooms from spinning.
 - Each member keeps its own persistent `Group: <name>` session, so room context survives like any other conversation.

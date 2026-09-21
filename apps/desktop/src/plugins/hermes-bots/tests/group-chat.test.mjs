@@ -153,6 +153,28 @@ test('mention routing: display titles resolve to the member and @user never matc
   assert.equal(parsed.mentioned.size, 1)
 })
 
+test('later rounds: an unaddressed reply does not re-wake the whole roster', () => {
+  const gc = load(() => '(pass)')
+  const log = [
+    { from: { kind: 'user', name: 'You' }, text: 'check prod health', at: 1 },
+    { from: { kind: 'member', name: 'research' }, text: 'API is green.', at: 2 }
+  ]
+  const first = gc.resolveGroupResponders(log, MEMBERS, 0)
+  assert.equal(first.length, 3)
+  const later = gc.resolveGroupResponders(log, MEMBERS, 1)
+  assert.equal(later.length, 0)
+})
+
+test('later rounds: a teammate @-mentioned after the user message is pulled in', () => {
+  const gc = load(() => '(pass)')
+  const log = [
+    { from: { kind: 'user', name: 'You' }, text: 'check prod health', at: 1 },
+    { from: { kind: 'member', name: 'research' }, text: 'API is green — @builder verify the UI.', at: 2 }
+  ]
+  const later = gc.resolveGroupResponders(log, MEMBERS, 1)
+  assert.equal(JSON.stringify(later.map(m => m.name)), JSON.stringify(['builder']))
+})
+
 test('a member @-mentioned by another bot joins the NEXT round', async () => {
   const gc = load((profile, prompt) => {
     if (profile === 'research' && !prompt.includes('(you)')) {
@@ -697,6 +719,8 @@ test('turn prompt: results are full quality — only chatter is asked to stay sh
   })
   assert.match(prompt, /never thin out real content/i)
   assert.match(prompt, /Keep chatter short/i)
+  assert.match(prompt, /Decide whether to speak BEFORE using any tool/i)
+  assert.match(pluginSource, /Do not load skills, search, or run commands just to decide to pass/)
 })
 
 test('threads: room composer mints a new thread; replies land in it', async () => {

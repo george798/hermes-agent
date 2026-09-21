@@ -68,7 +68,30 @@ class OpenCodeGoProfile(ProviderProfile):
         return self.default_max_tokens
 
     def build_api_kwargs_extras(
-        self, *, reasoning_config: dict | None = None, model: str | None = None, **context
+        self,
+        *,
+        reasoning_config: dict | None = None,
+        model: str | None = None,
+        session_id: str | None = None,
+        **context,
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        extra_body, top_level = self._reasoning_api_kwargs_extras(
+            reasoning_config=reasoning_config, model=model
+        )
+        try:
+            from agent.opencode_session import resolve_opencode_session_id
+
+            raw = session_id or context.get("session_id")
+            if raw:
+                headers = dict(top_level.get("extra_headers") or {})
+                headers["x-opencode-session"] = resolve_opencode_session_id(raw)
+                top_level["extra_headers"] = headers
+        except Exception:
+            pass
+        return extra_body, top_level
+
+    def _reasoning_api_kwargs_extras(
+        self, *, reasoning_config: dict | None = None, model: str | None = None
     ) -> tuple[dict[str, Any], dict[str, Any]]:
         extra_body: dict[str, Any] = {}
         top_level: dict[str, Any] = {}
