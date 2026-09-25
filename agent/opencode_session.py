@@ -16,21 +16,7 @@ from __future__ import annotations
 
 from typing import Any, Mapping, MutableMapping, Optional
 
-_PROVIDERS = frozenset(
-    {
-        "omniroute",
-        "opencode-go",
-        "opencode_go",
-        "go",
-        "opencode-go-sub",
-        "opencode-zen",
-        "opencode",
-        "opencode_zen",
-        "zen",
-    }
-)
-
-_URL_MARKERS = (":20128", "opencode.ai")
+_URL_MARKERS = (":20128",)
 _FALLBACK_SESSION = "hermes-omniroute"
 
 
@@ -40,13 +26,16 @@ def needs_opencode_session(
     model: Optional[str] = None,
     base_url: Optional[str] = None,
 ) -> bool:
-    """Return True when this request may be routed to OpenCode Go or Zen."""
+    """Return True when this request goes through OmniRoute.
+
+    Official OpenCode Zen/Go targets are covered by ``agent.opencode_affinity``.
+    OmniRoute (``127.0.0.1:20128``) is a custom provider, so that path never
+    runs, and Go rejects the hop without ``x-opencode-session``.
+    """
+    del model  # model id is not enough; the proxy URL or provider name is
     provider_id = (provider or "").strip().lower()
-    model_id = (model or "").strip().lower()
     url = (base_url or "").strip().lower()
-    if provider_id in _PROVIDERS:
-        return True
-    if model_id.startswith("opencode-go/") or model_id.startswith("opencode-zen/"):
+    if provider_id == "omniroute":
         return True
     return any(marker in url for marker in _URL_MARKERS)
 

@@ -5,14 +5,13 @@ from agent.opencode_session import (
     needs_opencode_session,
     resolve_opencode_session_id,
 )
-from agent.transports.chat_completions import ChatCompletionsTransport
 
 
-def test_needs_session_for_omniroute_and_go():
+def test_needs_session_for_omniroute_only():
     assert needs_opencode_session(provider="omniroute")
-    assert needs_opencode_session(model="opencode-go/kimi-k3-max")
     assert needs_opencode_session(base_url="http://127.0.0.1:20128/v1")
-    assert needs_opencode_session(base_url="https://opencode.ai/zen/go/v1")
+    assert not needs_opencode_session(model="opencode-go/kimi-k3-max")
+    assert not needs_opencode_session(base_url="https://opencode.ai/zen/go/v1")
     assert not needs_opencode_session(
         provider="ollama-launch",
         model="qwen3.6:35b-a3b-q4_K_M",
@@ -51,14 +50,3 @@ def test_attach_skips_unrelated_providers():
         session_id="conv-abc",
     )
     assert "extra_headers" not in kwargs
-
-
-def test_chat_completions_legacy_path_adds_header_for_omniroute():
-    kwargs = ChatCompletionsTransport().build_kwargs(
-        model="qwen3.7",
-        messages=[{"role": "user", "content": "ping"}],
-        base_url="http://127.0.0.1:20128/v1",
-        provider_name="omniroute",
-        session_id="sess-omni",
-    )
-    assert kwargs["extra_headers"]["x-opencode-session"] == "sess-omni"
